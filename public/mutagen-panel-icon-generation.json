@@ -1,0 +1,16 @@
+{
+  "tool": "image_gen.imagegen",
+  "prompt": "Use case: logo-brand. Asset type: finished high-resolution flat Windows desktop application icon for a file synchronization utility. Primary request: a sophisticated, precise, strictly flat 2D sync-tool icon. One large rounded-square tile in solid deep navy, with two bold curved arrows forming a clean circular synchronization loop, one arrow solid cyan and the other solid white. The two arrowheads and the open central negative space must be immediately recognizable as bidirectional synchronization. Professional geometric graphic design, balanced proportions, smooth clean contours, consistent arrow thickness, carefully spaced arrow tips. Front-facing orthographic 2D vector-like artwork with ONLY solid flat color fills. Composition: centered single icon filling 90 percent of a square canvas, even transparent margin, completely visible silhouette. True alpha transparency outside the tile. High fidelity means exceptionally crisp polished geometry and well-resolved edges, not realism. Readable at 16, 24, 32 and 48 pixels. Strictly NO shadows of any kind, NO drop shadows, NO 3D, NO extrusion, NO bevels, NO gradients, NO gloss, NO lighting effects, NO highlights, NO reflections, NO texture, NO material rendering, NO perspective. No text, letters, watermark, surrounding scene, additional objects, or mockup. Deliver one final flat app icon.",
+  "transparent_background": true,
+  "source": "mutagen-panel.png",
+  "windows_icon": "mutagen-panel.ico",
+  "sizes": [
+    256,
+    128,
+    64,
+    48,
+    32,
+    24,
+    16
+  ]
+}

@@ -2,6 +2,10 @@
 chcp 65001 >nul
 title Mutagen 同步面板
 cd /d "%~dp0"
+if /i "%~1"=="--create-desktop-shortcut" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\create-desktop-shortcut.ps1"
+  exit /b
+)
 where node >nul 2>nul
 if errorlevel 1 (
   echo 未检测到 Node.js，请先安装 Node.js 18 或更高版本：https://nodejs.org/

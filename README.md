@@ -17,6 +17,8 @@
    也可以先启动面板，在「更多 → 设置」里修改，保存后立即生效。
 3. Windows 双击 `mutagen-panel启动.bat`；macOS / Linux 在本目录执行 `npm start`（或 `node server.js`）。浏览器会自动打开 `http://127.0.0.1:7790`。
 
+Windows 桌面图标：在项目目录运行 `.\mutagen-panel启动.bat --create-desktop-shortcut`，会创建或更新带双向同步图标的桌面快捷方式。`.bat` 文件本身不能单独设置图标，请使用该快捷方式启动，不要把启动脚本单独复制到桌面。移动项目目录后，在新目录重新运行此命令即可更新快捷方式。
+
 ## config.json
 
 | 字段 | 说明 |
