@@ -1,0 +1,15 @@
+{
+  "mutagen": "mutagen",
+  "host": "127.0.0.1",
+  "port": 7790,
+  "openBrowser": true,
+  "pollIntervalMs": 1000,
+  "ssh": "ssh",
+  "sshKeygen": "ssh-keygen",
+  "editors": {
+    "vscode": "code",
+    "idea": "idea64"
+  },
+  "localRoot": "",
+  "defaultHost": ""
+}

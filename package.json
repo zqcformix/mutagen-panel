@@ -1,0 +1,13 @@
+{
+  "name": "mutagen-panel",
+  "version": "1.0.0",
+  "description": "基于 mutagen 的本地 ↔ 服务器文件同步面板",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
