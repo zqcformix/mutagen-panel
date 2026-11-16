@@ -12,6 +12,7 @@ const { Store } = require('./lib/store');
 const specs = require('./lib/spec');
 const { createSsh, parseSshConfig, cdExpr, shq, SSH_CONFIG_FILE } = require('./lib/ssh');
 const { createRemoteFs } = require('./lib/remote-fs');
+const { prepareSessionDeletion, createMutationQueue } = require('./lib/deletion-guard');
 
 const ROOT = __dirname;
 const CONFIG_PATH = path.join(ROOT, 'config.json');
@@ -578,13 +579,13 @@ async function bulkAction(action, ids) {
   return { count: pick.length };
 }
 
-/** Server-side endpoint of a session as file-manager arguments, or null when that side is not over SSH. */
-function remoteTarget(session) {
-  const e = session[specs.remoteKeyOf(session, (store.data.sessions[session.identifier] || {}).spec)] || {};
-  if (e.protocol !== 'ssh') return null;
-  let p = String(e.path || '').trim();
-  if (!p.startsWith('/') && !p.startsWith('~')) p = p ? `~/${p}` : '~';
-  return { host: `${e.user ? `${e.user}@` : ''}${e.host || ''}`, port: e.port ? String(e.port) : '', path: p };
+/** Destructive operations must fail closed when the daemon cannot supply a current complete list. */
+async function deletionSessions() {
+  const r = await mgMust(['sync', 'list', '--template', '{{json .}}'], { quiet: true, timeout: 20000 });
+  const list = JSON.parse(r.stdout.trim());
+  if (!Array.isArray(list)) throw badRequest('无法获取完整同步会话列表，已取消目录删除');
+  applyList(list);
+  return list;
 }
 
 /**
@@ -592,39 +593,46 @@ function remoteTarget(session) {
  * directory leaves the session intact; it is deleted only after mutagen has let go of it.
  */
 async function deleteSession(id, { deleteRemote = false } = {}) {
-  const session = findSession(id);
-  let target = null;
-  if (deleteRemote) {
-    target = remoteTarget(session);
-    if (!target) throw badRequest('这个会话的源目录不在服务器上，不能删除服务器目录');
-    try {
-      target.path = (await remoteFs.remove(target.host, target.port, [target.path], { syncRoots: syncRootsOn(target.host, id), checkOnly: true })).paths[0];
-    } catch (error) {
-      throw new HttpError(error.status || 400, `未删除会话：${error.message}`, error.code);
-    }
-  }
-  if (target) setOp(id, '正在删除会话和服务器目录…');
+  findSession(id);
+  setOp(id, deleteRemote ? '正在检查并删除会话和服务器目录…' : '正在删除会话…');
   try {
-    await mgMust(['sync', 'terminate', id]);
-  } catch (error) {
-    if (target) setOp(id, null);
-    throw error;
-  }
-  delete store.data.sessions[id];
-  store.save();
-  let remote = null;
-  if (target) {
-    try {
-      const r = await remoteFs.remove(target.host, target.port, [target.path], { syncRoots: syncRootsOn(target.host, id) });
-      remote = { path: target.path, deleted: r.deleted.length > 0, missing: r.missing.length > 0, error: r.failed.length ? r.failed[0].error : '' };
-    } catch (error) {
-      remote = { path: target.path, deleted: false, missing: false, error: error.message };
-    } finally {
-      setOp(id, null);
+    let plan = null;
+    let session;
+    let remoteKey;
+    if (deleteRemote) {
+      try {
+        const sessions = await deletionSessions();
+        session = findSession(id);
+        remoteKey = specs.remoteKeyOf(session, (store.data.sessions[id] || {}).spec);
+        plan = await prepareSessionDeletion(session, sessions, remoteKey, { ssh, remoteFs });
+        const { target } = plan;
+        await remoteFs.remove(target.host, target.port, [target.path], { ...plan, protectContents: true, checkOnly: true });
+      } catch (error) {
+        throw new HttpError(error.status || 400, `未删除会话：${error.message}`, error.code);
+      }
     }
+    await mgMust(['sync', 'terminate', id]);
+    delete store.data.sessions[id];
+    store.save();
+    let remote = null;
+    if (plan) {
+      const { target } = plan;
+      try {
+        // Detect sessions started outside this panel during preflight/termination, including temporary ones.
+        const sessions = await deletionSessions();
+        const checked = await prepareSessionDeletion(session, [...sessions, session], remoteKey, { ssh, remoteFs });
+        if (checked.expectedPath !== plan.expectedPath) throw badRequest('服务器目录在检查后发生变化，已取消目录删除');
+        const r = await remoteFs.remove(target.host, target.port, [target.path], { ...checked, protectContents: true });
+        remote = { path: target.path, deleted: r.deleted.length > 0, missing: r.missing.length > 0, error: r.failed.length ? r.failed[0].error : '' };
+      } catch (error) {
+        remote = { path: target.path, deleted: false, missing: false, error: error.message };
+      }
+    }
+    return { ok: true, remote };
+  } finally {
+    setOp(id, null);
+    await kick();
   }
-  await kick();
-  return { ok: true, remote };
 }
 
 function patchMeta(id, body) {
@@ -968,10 +976,12 @@ async function serveStatic(req, res, pathname) {
 }
 
 const routes = [];
+const sessionMutation = createMutationQueue();
 const route = (method, pattern, handler) => {
   const keys = [];
   const re = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-  routes.push({ method, re, keys, handler });
+  const mutatesSessions = method !== 'GET' && /^\/api\/(sessions(?:\/|$)|bulk\/|daemon\/|config(?:\/|$)|remote\/delete$)/.test(pattern);
+  routes.push({ method, re, keys, handler: mutatesSessions ? (context) => sessionMutation(() => handler(context)) : handler });
 };
 
 route('GET', '/api/ping', () => ({ app: APP.name, version: APP.version }));
