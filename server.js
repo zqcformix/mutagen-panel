@@ -578,13 +578,53 @@ async function bulkAction(action, ids) {
   return { count: pick.length };
 }
 
-async function deleteSession(id) {
-  findSession(id);
-  await mgMust(['sync', 'terminate', id]);
+/** Server-side endpoint of a session as file-manager arguments, or null when that side is not over SSH. */
+function remoteTarget(session) {
+  const e = session[specs.remoteKeyOf(session, (store.data.sessions[session.identifier] || {}).spec)] || {};
+  if (e.protocol !== 'ssh') return null;
+  let p = String(e.path || '').trim();
+  if (!p.startsWith('/') && !p.startsWith('~')) p = p ? `~/${p}` : '~';
+  return { host: `${e.user ? `${e.user}@` : ''}${e.host || ''}`, port: e.port ? String(e.port) : '', path: p };
+}
+
+/**
+ * With deleteRemote the server root is checked before terminating, so a protected or unreachable
+ * directory leaves the session intact; it is deleted only after mutagen has let go of it.
+ */
+async function deleteSession(id, { deleteRemote = false } = {}) {
+  const session = findSession(id);
+  let target = null;
+  if (deleteRemote) {
+    target = remoteTarget(session);
+    if (!target) throw badRequest('这个会话的源目录不在服务器上，不能删除服务器目录');
+    try {
+      target.path = (await remoteFs.remove(target.host, target.port, [target.path], { syncRoots: syncRootsOn(target.host, id), checkOnly: true })).paths[0];
+    } catch (error) {
+      throw new HttpError(error.status || 400, `未删除会话：${error.message}`, error.code);
+    }
+  }
+  if (target) setOp(id, '正在删除会话和服务器目录…');
+  try {
+    await mgMust(['sync', 'terminate', id]);
+  } catch (error) {
+    if (target) setOp(id, null);
+    throw error;
+  }
   delete store.data.sessions[id];
   store.save();
+  let remote = null;
+  if (target) {
+    try {
+      const r = await remoteFs.remove(target.host, target.port, [target.path], { syncRoots: syncRootsOn(target.host, id) });
+      remote = { path: target.path, deleted: r.deleted.length > 0, missing: r.missing.length > 0, error: r.failed.length ? r.failed[0].error : '' };
+    } catch (error) {
+      remote = { path: target.path, deleted: false, missing: false, error: error.message };
+    } finally {
+      setOp(id, null);
+    }
+  }
   await kick();
-  return { ok: true };
+  return { ok: true, remote };
 }
 
 function patchMeta(id, body) {
@@ -946,7 +986,7 @@ route('POST', '/api/sessions/preview', ({ body }) => {
 });
 route('PUT', '/api/sessions/:id', ({ params, body }) => editSession(params.id, body));
 route('PATCH', '/api/sessions/:id/meta', ({ params, body }) => patchMeta(params.id, body));
-route('DELETE', '/api/sessions/:id', ({ params }) => deleteSession(params.id));
+route('DELETE', '/api/sessions/:id', ({ params, body }) => deleteSession(params.id, { deleteRemote: body.deleteRemote === true }));
 route('POST', '/api/sessions/:id/overwrite', ({ params, body }) => overwriteSession(params.id, body.target));
 route('POST', '/api/sessions/:id/resolve', ({ params, body }) => resolveConflict(params.id, body));
 route('POST', '/api/sessions/:id/:action', ({ params }) => sessionAction(params.id, params.action));
@@ -1008,12 +1048,12 @@ const remoteCall = async (fn) => {
 route('GET', '/api/remote/info', ({ query }) => remoteCall(() => remoteFs.info(...remoteQuery(query))));
 route('GET', '/api/remote/ls', ({ query }) => remoteCall(() => remoteFs.list(...remoteQuery(query), specs.unquotePath(query.get('path')) || '~', { ancestors: query.get('ancestors') === '1' })));
 /** Server-side roots of sync sessions on this host, so the file manager cannot delete them out from under mutagen. */
-function syncRootsOn(host) {
+function syncRootsOn(host, exceptId = null) {
   const bare = (h) => String(h || '').replace(/^.*@/, '').toLowerCase();
   const target = bare(host);
   const roots = [];
   for (const s of state.sessions) {
-    if (s.labels && s.labels[TEMP_LABEL]) continue;
+    if ((s.labels && s.labels[TEMP_LABEL]) || s.identifier === exceptId) continue;
     for (const k of ['alpha', 'beta']) {
       const e = s[k];
       if (e && e.protocol === 'ssh' && bare(e.host) === target) roots.push({ path: e.path || '~', title: (store.data.sessions[s.identifier] || {}).title || s.name || s.identifier });

@@ -957,6 +957,60 @@
     });
   }
 
+  /** Resolves to { deleteRemote } or null. Deleting the server directory needs its name typed in. */
+  function deleteSessionDialog(v) {
+    const canRemote = v.remote.protocol === 'ssh';
+    const dirName = String(v.remote.path || '').split('/').filter(Boolean).pop() || v.remote.path || '~';
+    return new Promise((resolve) => {
+      let result = null;
+      const choice = (mode, ic, t, d, active) => `<button type="button" class="choice ${active ? 'active' : ''}" data-mode="${mode}"><span class="t">${icon(ic, 'i-sm')}${t}</span><span class="d">${d}</span></button>`;
+      openLayer({
+        size: 'sm',
+        html: `${modalHead('删除同步会话', esc(v.title), 'trash', 'tone-err')}
+          <div class="modal-body" style="color:var(--text-2);font-size:13.5px">
+            ${canRemote ? `<div class="choice-grid del-modes" data-m="modes">
+                ${choice('keep', 'layers', '仅删除会话', '停止并删除同步会话，服务器和本地的文件都保留', true)}
+                ${choice('remote', 'server', '删除会话和服务器目录', '会话停止后永久删除服务器上的目录，本地文件保留', false)}
+              </div>
+              <div data-m="remote" hidden>
+                <div class="del-warn">${icon('alert', 'i-sm')}<span>将在 <b>${esc(v.remote.hostFull)}</b> 上永久删除 <span class="mono" style="word-break:break-all">${esc(v.remote.path)}</span> 及其中的所有文件，<b>无法恢复</b>，不会放进回收站。</span></div>
+                <div class="field" style="margin-top:12px"><label>输入目录名 <b class="mono">${esc(dirName)}</b> 以确认</label><input class="input mono" data-m="confirm" spellcheck="false" autocomplete="off" placeholder="${esc(dirName)}"></div>
+              </div>`
+            : '只会停止并删除这个同步会话，<b>两端的文件都会保留</b>，不会被删除。'}
+          </div>
+          <div class="modal-foot"><span class="spacer"></span><button class="btn" data-close>取消</button><button class="btn btn-danger" data-m="ok">删除会话</button></div>`,
+        onClose: () => resolve(result),
+        mount(panel, layer) {
+          const q = (m) => panel.querySelector(`[data-m="${m}"]`);
+          const btn = q('ok');
+          let mode = 'keep';
+          const valid = () => mode === 'keep' || q('confirm').value.trim() === dirName;
+          const sync = () => {
+            panel.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+            if (canRemote) q('remote').hidden = mode !== 'remote';
+            btn.textContent = mode === 'remote' ? '删除会话和服务器目录' : '删除会话';
+            btn.disabled = !valid();
+          };
+          const submit = () => { if (!valid()) return; result = { deleteRemote: mode === 'remote' }; layer.close(); };
+          if (canRemote) {
+            q('modes').addEventListener('click', (e) => {
+              const b = e.target.closest('[data-mode]');
+              if (!b) return;
+              mode = b.dataset.mode;
+              sync();
+              if (mode === 'remote') q('confirm').focus();
+            });
+            q('confirm').addEventListener('input', sync);
+            q('confirm').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+          }
+          btn.addEventListener('click', submit);
+          sync();
+          setTimeout(() => btn.focus(), 60);
+        },
+      });
+    });
+  }
+
   // ------------------------------------------------------------ popover
   const pop = $('#popover');
   let popAnchor = null;
@@ -1024,7 +1078,7 @@
       ${mi('overwrite', 'upload', `用本地覆盖${srcName}`, `data-target="remote" ${dis} danger`)}
       ${mi('reset', 'rotate', '重置同步历史', dis)}
       <div class="menu-sep"></div>
-      ${mi('delete', 'trash', '删除会话（保留两端文件）', `${dis} danger`)}`;
+      ${mi('delete', 'trash', '删除会话…', `${dis} danger`)}`;
   }
 
 
@@ -1111,14 +1165,18 @@
     edit: (t, id) => { const s = sessionOf(id); if (s) openSessionForm(s); },
     delete: async (t, id) => {
       const v = VIEWS.get(id);
-      const ok = await confirmDialog({
-        title: '删除同步会话',
-        message: `确定删除「<b>${esc(v.title)}</b>」吗？<br><br>只会停止并删除这个同步会话，<b>两端的文件都会保留</b>，不会被删除。`,
-        okText: '删除会话',
-        danger: true,
-        ic: 'trash',
-      });
-      if (ok) doAct(`${id}:op`, () => api('DELETE', `/api/sessions/${id}`), '会话已删除，文件均已保留');
+      if (!v) return;
+      const choice = await deleteSessionDialog(v);
+      if (!choice) return;
+      if (!choice.deleteRemote) {
+        doAct(`${id}:op`, () => api('DELETE', `/api/sessions/${id}`), '会话已删除，文件均已保留');
+        return;
+      }
+      const r = await doAct(`${id}:op`, () => api('DELETE', `/api/sessions/${id}`, { deleteRemote: true }));
+      const rm = r && r.remote;
+      if (!rm) return;
+      if (rm.error) toast(`会话已删除，但服务器目录 ${rm.path} 删除失败：${rm.error}`, 'error', { duration: 10000 });
+      else toast(rm.missing ? `会话已删除，服务器目录 ${rm.path} 本就不存在` : `会话已删除，服务器目录 ${rm.path} 已删除`, 'ok');
     },
     'card-menu': (t, id) => openPopover(t, cardMenu(VIEWS.get(id), !!t.closest('.drawer')), id),
     duplicate: (t, id) => { const s = sessionOf(id); if (s) openSessionForm(null, s._panel.groupId || NONE, s); },
@@ -3131,7 +3189,7 @@
     add('edit', '编辑配置', 'edit bianji', run('edit'));
     add('copyPlus', '以此配置新建会话', 'duplicate clone 复制', run('duplicate'));
     add('tag', '重命名', 'rename', run('rename'));
-    add('trash', '删除会话（保留两端文件）', 'delete remove shanchu', run('delete'), true);
+    add('trash', '删除会话…', 'delete remove shanchu 删除服务器目录', run('delete'), true);
     return list;
   }
 

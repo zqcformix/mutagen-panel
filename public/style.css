@@ -611,6 +611,9 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 .choice .t .i { color: var(--muted); }
 .choice.active .t .i { color: var(--text); }
 .choice .d { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+.del-modes { grid-template-columns: 1fr; margin-bottom: 4px; }
+.del-modes .choice[data-mode="remote"].active { border-color: var(--err); box-shadow: 0 0 0 1px var(--err); }
+.del-modes .choice[data-mode="remote"].active .t, .del-modes .choice[data-mode="remote"].active .t .i { color: var(--err); }
 
 .tags-input {
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 36px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 4px 6px; background: var(--surface);
