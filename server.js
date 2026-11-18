@@ -1075,6 +1075,7 @@ route('POST', '/api/remote/delete', ({ body }) => remoteCall(async () => {
   await poll();
   return remoteFs.remove(String(body.host || ''), String(body.port || ''), body.paths, { syncRoots: syncRootsOn(body.host) });
 }));
+route('POST', '/api/remote/mkdir', ({ body }) => remoteCall(() => remoteFs.mkdir(String(body.host || ''), String(body.port || ''), specs.unquotePath(String(body.path || '')) || '~', body.name)));
 route('GET', '/api/remote/read', ({ query }) => remoteCall(() => remoteFs.read(...remoteQuery(query), query.get('path') || '')));
 
 route('GET', '/api/fs/ls', ({ query }) => listLocal(query.get('path') || ''));

@@ -937,19 +937,38 @@
     });
   }
 
-  function promptDialog({ title, label, value = '', placeholder = '', okText = '确定' }) {
+  /** submit(value) may return an error message (or throw) to keep the dialog open and show it under the input. */
+  function promptDialog({ title, label, value = '', placeholder = '', okText = '确定', ic = 'edit', help = '', submit: onSubmit }) {
     return new Promise((resolve) => {
       let result = null;
       openLayer({
         size: 'sm',
-        html: `${modalHead(title, '', 'edit')}
-          <div class="modal-body"><div class="field"><label>${esc(label)}</label><input class="input" data-m="input" value="${esc(value)}" placeholder="${esc(placeholder)}"></div></div>
+        html: `${modalHead(title, '', ic)}
+          <div class="modal-body"><div class="field"><label>${esc(label)}</label><input class="input" data-m="input" value="${esc(value)}" placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off"><div class="help" data-m="help">${esc(help)}</div></div></div>
           <div class="modal-foot"><span class="spacer"></span><button class="btn" data-close>取消</button><button class="btn btn-primary" data-m="ok">${esc(okText)}</button></div>`,
         onClose: () => resolve(result),
         mount(panel, layer) {
           const input = panel.querySelector('[data-m="input"]');
-          const submit = () => { if (input.value.trim()) { result = input.value.trim(); layer.close(); } };
-          panel.querySelector('[data-m="ok"]').addEventListener('click', submit);
+          const ok = panel.querySelector('[data-m="ok"]');
+          const helpEl = panel.querySelector('[data-m="help"]');
+          const showErr = (msg) => { helpEl.textContent = msg; helpEl.classList.add('err'); input.focus(); };
+          const submit = async () => {
+            const v = input.value.trim();
+            if (!v || ok.disabled) return;
+            if (onSubmit) {
+              ok.disabled = true;
+              ok.classList.add('loading');
+              let err;
+              try { err = await onSubmit(v); } catch (e) { err = e.message; }
+              ok.disabled = false;
+              ok.classList.remove('loading');
+              if (err) { showErr(err); return; }
+            }
+            result = v;
+            layer.close();
+          };
+          ok.addEventListener('click', submit);
+          input.addEventListener('input', () => { helpEl.textContent = help; helpEl.classList.remove('err'); });
           input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
           setTimeout(() => { input.focus(); input.select(); }, 60);
         },
@@ -1377,7 +1396,46 @@
 
   const keyPermsBtn = (attr) => `<button type="button" class="btn btn-xs" ${attr}>${icon('key', 'i-sm')}修复私钥权限</button>`;
 
-  const IGNORE_PRESETS = ['node_modules', '.idea', '.vscode', 'target', 'build', 'dist', 'out', '__pycache__', '.venv', '*.log', '.DS_Store', '.gradle', 'logs', 'tmp'];
+  const IGNORE_PRESETS = ['node_modules', 'oh_modules', '.idea', '.vscode', 'target', 'build', 'dist', 'out', '__pycache__', '.venv', '*.log', '.DS_Store', '.gradle', 'logs', 'tmp'];
+  /** Rules without a "/" match that name at any depth, so a template also covers a folder holding several projects. */
+  const IGNORE_TEMPLATES = [
+    {
+      id: 'android', name: 'Android',
+      desc: 'Android Studio / Gradle：构建产物、Gradle 和 Kotlin 缓存、IDE 配置、原生编译缓存，以及记录本机 SDK 路径的 local.properties',
+      rules: ['build', '.gradle', '.kotlin', '.idea', '*.iml', 'local.properties', '.externalNativeBuild', '.cxx', 'captures', '.DS_Store'],
+    },
+    {
+      id: 'harmony', name: 'HarmonyOS',
+      desc: 'DevEco Studio / hvigor：ohpm 依赖、构建产物、hvigor 和预览器缓存、测试与分析输出、clangd 配置、自动生成的 BuildProfile.ets，以及记录本机 SDK 路径的 local.properties',
+      rules: ['oh_modules', 'node_modules', 'build', '.hvigor', '.idea', 'local.properties', '.cxx', '.preview', '.test', '.appanalyzer', '/.clangd', '/.clang-format', '/.clang-tidy', '/.cache', 'BuildProfile.ets'],
+    },
+    {
+      id: 'ios', name: 'iOS',
+      desc: 'Xcode / CocoaPods / SwiftPM：构建产物、DerivedData、个人 Xcode 状态和 Pods 依赖',
+      rules: ['build', 'DerivedData', 'xcuserdata', '*.xcuserstate', 'Pods', '.build', '.DS_Store'],
+    },
+    {
+      id: 'flutter', name: 'Flutter',
+      desc: 'Flutter / Dart：构建产物、.dart_tool、插件清单，以及 Android、iOS 子工程的依赖和本机配置',
+      rules: ['build', '.dart_tool', '.flutter-plugins', '.flutter-plugins-dependencies', '.pub-cache', '.gradle', '.idea', '*.iml', 'local.properties', 'Pods', '.DS_Store'],
+    },
+    {
+      id: 'node', name: '前端 / Node.js',
+      desc: 'npm / pnpm / Vite / Next.js 等：依赖、打包产物、框架缓存、测试覆盖率和日志',
+      rules: ['node_modules', 'dist', '.next', '.nuxt', '.turbo', '.cache', '.parcel-cache', 'coverage', '*.log'],
+    },
+    {
+      id: 'java', name: 'Java',
+      desc: 'Maven / Gradle / IntelliJ IDEA：编译输出、Gradle 缓存、IDE 配置、class 文件和运行日志',
+      rules: ['target', 'build', '.gradle', 'out', '.idea', '*.iml', '*.class', 'logs'],
+    },
+    {
+      id: 'python', name: 'Python',
+      desc: 'Python：字节码缓存、虚拟环境、测试和类型检查缓存、打包元数据',
+      rules: ['__pycache__', '*.pyc', '.venv', 'venv', '.pytest_cache', '.mypy_cache', '.ruff_cache', '*.egg-info', '.ipynb_checkpoints'],
+    },
+  ];
+  const templateOn = (t, ignores) => t.rules.every((r) => ignores.includes(r));
 
   const LOCAL_HOST = '__local';
   const hostLabel = (v) => (v === LOCAL_HOST ? '本机目录' : v);
@@ -1501,8 +1559,9 @@
         </div>
         <div class="form-section">
           <h4>${icon('filter', 'i-sm')}忽略规则 <span class="tag">匹配的文件或目录不参与同步，写法类似 .gitignore</span></h4>
-          <div class="tags-input" data-m="tags"><input data-m="tag-input" placeholder="输入后回车添加，例如 node_modules 或 *.log"></div>
+          <div class="presets tpls" data-m="templates"></div>
           <div class="presets" data-m="presets"></div>
+          <div class="tags-input" data-m="tags"><input data-m="tag-input" placeholder="输入后回车添加，例如 node_modules 或 *.log"></div>
           <label class="check" style="margin-top:12px"><input type="checkbox" data-f="spec.ignoreVcs">忽略版本库目录（.git、.svn 等）。<span class="muted">想在本地 IDE 看 Git 变化就不要勾选</span></label>
         </div>
         <details class="adv form-section">
@@ -1533,6 +1592,15 @@
       html,
       mount(panel, layer) {
         const q = (m) => panel.querySelector(`[data-m="${m}"]`);
+        const body = panel.querySelector('.modal-body');
+        const keep = document.createElement('div');
+        q('preview').closest('.form-section').appendChild(keep);
+        /** Content that shrinks while scrolled to the bottom would clamp scrollTop and shift everything under the pointer. */
+        function holdScroll(top) {
+          const deficit = Math.max(0, top - (body.scrollHeight - keep.offsetHeight - body.clientHeight));
+          if (deficit !== keep.offsetHeight) keep.style.height = `${deficit}px`;
+          if (body.scrollTop !== top) body.scrollTop = top;
+        }
         const fields = $$('[data-f]', panel);
         fields.forEach((el) => {
           const val = getPath(f, el.dataset.f);
@@ -1540,22 +1608,28 @@
           else el.value = val ?? '';
         });
 
+        const setPreview = (s) => {
+          const top = body.scrollTop;
+          q('preview').textContent = s;
+          holdScroll(top);
+        };
         const preview = debounce(async () => {
           if (!f.spec.remote.path || !f.spec.local.path) {
-            q('preview').textContent = '填写服务器目录和本地目录后显示';
+            setPreview('填写服务器目录和本地目录后显示');
             return;
           }
           try {
             const r = await api('POST', '/api/sessions/preview', { spec: f.spec, title: effectiveTitle() });
-            q('preview').textContent = r.command;
+            setPreview(r.command);
           } catch (err) {
-            q('preview').textContent = `# ${err.message}`;
+            setPreview(`# ${err.message}`);
           }
         }, 250);
 
         const effectiveTitle = () => f.title.trim() || basename(f.spec.remote.path) || basename(f.spec.local.path) || '';
 
         function refresh() {
+          const top = body.scrollTop;
           const d = f.spec.direction;
           $$('[data-dir]', panel).forEach((b) => b.classList.toggle('active', b.dataset.dir === d));
           $$('[data-conf]', panel).forEach((b) => b.classList.toggle('active', b.dataset.conf === f.spec.conflict));
@@ -1576,7 +1650,13 @@
             t.innerHTML = `${esc(ig)}<button type="button" data-rm="${i}" title="移除">${icon('x', 'i-sm')}</button>`;
             tagsBox.insertBefore(t, input);
           });
-          q('presets').innerHTML = `<span class="help" style="align-self:center">常用：</span>${IGNORE_PRESETS.map((p) => `<button type="button" class="preset ${f.spec.ignores.includes(p) ? 'on' : ''}" data-preset="${esc(p)}">${esc(p)}</button>`).join('')}`;
+          q('templates').innerHTML = `<span class="help">项目类型：</span>${IGNORE_TEMPLATES.map((t) => {
+            const on = templateOn(t, f.spec.ignores);
+            const missing = t.rules.filter((r) => !f.spec.ignores.includes(r)).length;
+            const tip = `${t.desc}\n\n${on ? '已全部添加，再点一次移除' : `点击添加 ${missing} 条规则`}：\n${t.rules.join('  ')}`;
+            return `<button type="button" class="preset tpl ${on ? 'on' : ''}" data-tpl="${t.id}" title="${esc(tip)}">${esc(t.name)}<span class="n">${t.rules.length}</span></button>`;
+          }).join('')}`;
+          q('presets').innerHTML = `<span class="help">常用：</span>${IGNORE_PRESETS.map((p) => `<button type="button" class="preset ${f.spec.ignores.includes(p) ? 'on' : ''}" data-preset="${esc(p)}">${esc(p)}</button>`).join('')}`;
           panel.querySelector('[data-f="title"]').placeholder = effectiveTitle() ? `默认：${effectiveTitle()}` : '默认使用目录名';
           updateTarget();
           q('recent').innerHTML = recentRemotes().filter((x) => x.host === f.spec.remote.host).map((x) => `<option value="${esc(x.path)}"></option>`).join('');
@@ -1589,6 +1669,7 @@
               ? `按服务器目录自动生成：<span class="mono">${esc(localRoot)}</span>\\目录名${localRootFromConfig ? '' : '（沿用上次的位置）'}。可直接修改，或在${rootLink}里换根目录。`
               : `目录不存在时会自动创建（包括上级目录）。<button type="button" class="btn-link" data-m="auto-local">按服务器目录自动填写</button>`;
           preview();
+          holdScroll(top);
         }
 
         const updateTarget = debounce(async () => {
@@ -1682,6 +1763,18 @@
           }
           const rm = e.target.closest('[data-rm]');
           if (rm) { f.spec.ignores.splice(Number(rm.dataset.rm), 1); refresh(); return; }
+          const tpl = e.target.closest('[data-tpl]');
+          if (tpl) {
+            const t = IGNORE_TEMPLATES.find((x) => x.id === tpl.dataset.tpl);
+            if (templateOn(t, f.spec.ignores)) {
+              const shared = new Set(IGNORE_TEMPLATES.filter((x) => x !== t && templateOn(x, f.spec.ignores)).flatMap((x) => x.rules));
+              f.spec.ignores = f.spec.ignores.filter((r) => shared.has(r) || !t.rules.includes(r));
+            } else {
+              f.spec.ignores = [...f.spec.ignores, ...t.rules.filter((r) => !f.spec.ignores.includes(r))];
+            }
+            refresh();
+            return;
+          }
           const pr = e.target.closest('[data-preset]');
           if (pr) {
             const p = pr.dataset.preset;
@@ -1804,7 +1897,8 @@
 
         if (prefill) autoLocal();
         refresh();
-        setTimeout(() => panel.querySelector(editing || prefill ? '[data-f="title"]' : '[data-f="spec.remote.path"]').focus(), 80);
+        // preventScroll: a plain focus() here would yank the body back to the top if the user already scrolled down.
+        setTimeout(() => panel.querySelector(editing || prefill ? '[data-f="title"]' : '[data-f="spec.remote.path"]').focus({ preventScroll: true }), 80);
         if (template) toast('已复制主机、同步方式和忽略规则，选择新的服务器目录即可', 'info', { duration: 2600 });
         void titleTouched;
       },
@@ -1825,7 +1919,7 @@
               <button class="btn btn-icon" data-m="up" title="上一级">${icon('up')}</button>
               <input class="input mono" data-m="path" placeholder="${remote ? '/ 或 ~' : 'D:\\'}" spellcheck="false">
               <button class="btn btn-icon" data-m="reload" title="刷新">${icon('refresh')}</button>
-              ${remote ? '' : `<button class="btn btn-icon" data-m="mkdir" title="新建文件夹">${icon('folderPlus')}</button>`}
+              <button class="btn btn-icon" data-m="mkdir" title="新建文件夹">${icon('folderPlus')}</button>
             </div>
             <div class="browser-list" data-m="list"></div>
           </div>
@@ -1901,13 +1995,17 @@
             }
             if (m.dataset.m === 'choose' && current && current.path) { chosen = current.path; layer.close(); }
             if (m.dataset.m === 'mkdir' && current && current.path) {
-              const name = await promptDialog({ title: '新建文件夹', label: `在 ${current.path} 下新建`, placeholder: '文件夹名称' });
-              if (name) {
-                try {
-                  const r = await api('POST', '/api/fs/mkdir', { path: `${current.path.replace(/[\\/]+$/, '')}\\${name}` });
-                  load(r.path);
-                } catch (err) { toast(err.message, 'error'); }
-              }
+              let made = null;
+              await promptDialog({
+                title: '新建文件夹', ic: 'folderPlus', okText: '新建', label: `在 ${current.path} 下新建`, placeholder: '文件夹名称',
+                help: remote ? `将在服务器 ${host} 上创建` : '',
+                submit: async (name) => {
+                  made = remote
+                    ? await api('POST', '/api/remote/mkdir', { host, port: port || '', path: current.path, name })
+                    : await api('POST', '/api/fs/mkdir', { path: `${current.path.replace(/[\\/]+$/, '')}\\${name}` });
+                },
+              });
+              if (made) load(made.path);
             }
           });
           list.addEventListener('dblclick', (e) => {
@@ -2000,6 +2098,7 @@
           </div>
           <div class="fm-crumbs" data-q="crumbs" title="点击空白处直接输入路径 (Ctrl+L)"></div>
           <input class="input mono fm-path hidden" data-q="path" spellcheck="false" autocomplete="off" placeholder="/ 或 ~/project，回车跳转">
+          <button class="btn btn-sm" data-c="mkdir" title="在当前目录新建文件夹">${icon('folderPlus', 'i-sm')}新建文件夹</button>
           <button class="btn btn-sm" data-c="copy-cwd" title="复制当前目录的完整路径">${icon('copy', 'i-sm')}复制路径</button>
           <label class="fm-filter">${icon('search', 'i-sm')}<input data-q="filter" placeholder="筛选当前目录" spellcheck="false" autocomplete="off"><kbd>/</kbd></label>
           <button class="btn btn-sm fm-toggle" data-c="hidden" data-q="hidden" title="是否显示以 . 开头的文件和目录">${icon('eye', 'i-sm')}显示隐藏文件</button>
@@ -2302,7 +2401,7 @@
             ${localHtml(e)}
             <div class="fm-d-actions">
               ${dirTarget
-                ? `${isCwd ? '' : `<button class="btn btn-sm" data-c="open">${icon('folder', 'i-sm')}打开</button>`}<button class="btn btn-sm" data-c="term">${icon('terminal', 'i-sm')}终端</button><button class="btn btn-sm" data-c="new-session" title="把这个目录同步到本机">${icon('plus', 'i-sm')}新建同步会话</button>`
+                ? `${isCwd ? `<button class="btn btn-sm" data-c="mkdir">${icon('folderPlus', 'i-sm')}新建文件夹</button>` : `<button class="btn btn-sm" data-c="open">${icon('folder', 'i-sm')}打开</button>`}<button class="btn btn-sm" data-c="term">${icon('terminal', 'i-sm')}终端</button><button class="btn btn-sm" data-c="new-session" title="把这个目录同步到本机">${icon('plus', 'i-sm')}新建同步会话</button>`
                 : `<button class="btn btn-sm" data-c="download">${icon('download', 'i-sm')}下载</button><button class="btn btn-sm" data-c="term" title="在文件所在目录打开终端">${icon('terminal', 'i-sm')}终端</button>`}
               ${isCwd ? '' : `<button class="btn btn-sm btn-danger-ghost" data-c="delete" title="永久删除（Delete 键）">${icon('trash', 'i-sm')}删除</button>`}
             </div>
@@ -2420,6 +2519,26 @@
           go(st.path, { push: false });
           if (st.host === srv.host) checkServer(true);
         }
+        async function newFolder() {
+          if (!st.loaded || !st.path) return;
+          const dir = st.path;
+          const taken = new Set(st.entries.map((e) => e.name));
+          const synced = localFor(dir);
+          let made = null;
+          await promptDialog({
+            title: '新建文件夹', ic: 'folderPlus', okText: '新建', label: `在 ${dir} 下新建`, placeholder: '文件夹名称，例如 my-project',
+            help: synced ? `这里属于同步会话「${synced.title}」，新文件夹会同步到本地` : `将在服务器 ${st.host} 上创建`,
+            submit: async (name) => {
+              if (taken.has(name)) return `已存在同名的文件或文件夹：${name}`;
+              made = await api('POST', '/api/remote/mkdir', { host: st.host, port: st.port, path: dir, name });
+              return '';
+            },
+          });
+          if (!made) return;
+          toast(`已新建文件夹 ${made.name}${!prefs.hidden && made.name.startsWith('.') ? '（隐藏文件未显示，点「显示隐藏文件」查看）' : ''}`, 'ok');
+          if (st.path === dir) await go(dir, { push: false, select: made.path });
+          list.focus({ preventScroll: true });
+        }
         async function run(cmd) {
           const t = targets();
           const one = t[0];
@@ -2458,6 +2577,7 @@
               break;
             }
             case 'select-all': st.sel = new Set(st.view.map((e) => e.path)); updateSel(); break;
+            case 'mkdir': newFolder(); break;
             case 'delete': removeEntries(selected()); break;
             default: break;
           }
@@ -2474,6 +2594,7 @@
               ${fmi('term', 'terminal', '在服务器终端打开')}
               ${fmi('new-session', 'plus', '把当前目录同步到本机')}
               <div class="menu-sep"></div>
+              ${fmi('mkdir', 'folderPlus', '新建文件夹…')}
               ${fmi('reload', 'refresh', '刷新', 'F5')}
               ${fmi('hidden', 'eye', prefs.hidden ? '不显示隐藏文件' : '显示隐藏文件')}
               ${fmi('select-all', 'check', '全选', 'Ctrl A')}`;
