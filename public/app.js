@@ -1086,6 +1086,7 @@
       ${mi('copy', 'copy', '复制本地路径', `data-text="${esc(v.local.path)}"`)}
       ${mi('copy', 'copy', `复制${srcName}路径`, `data-text="${esc(remoteSsh ? `${v.remote.hostLabel}:${v.remote.path}` : v.remote.path)}"`)}
       ${mi('copy-cmd', 'code', '复制等效 mutagen 命令')}
+      ${v.ignores.length ? mi('copy-ignores', 'filter', `复制忽略规则（${v.ignores.length} 条）`) : ''}
       <div class="menu-sep"></div>
       ${mi('rename', 'tag', '重命名')}
       ${mi('duplicate', 'copyPlus', '以此配置新建会话')}
@@ -1202,6 +1203,7 @@
     palette: () => openPalette(),
     copy: (t) => copyText(t.dataset.text, '路径已复制'),
     'copy-cmd': (t, id) => copyText(VIEWS.get(id).command, '命令已复制'),
+    'copy-ignores': (t, id) => { const g = VIEWS.get(id).ignores; copyText(formatIgnoreRules(g), `已复制 ${g.length} 条忽略规则，可在其他会话的编辑窗口粘贴`); },
     open: (t) => doAct(`open:${t.dataset.path}:${t.dataset.with}`, () => api('POST', '/api/open', { path: t.dataset.path, with: t.dataset.with })),
     'remote-term': (t, id) => doAct(`${id}:term`, () => remoteTerm(VIEWS.get(id)), '已打开服务器终端'),
     overwrite: async (t, id) => {
@@ -1436,6 +1438,14 @@
     },
   ];
   const templateOn = (t, ignores) => t.rules.every((r) => ignores.includes(r));
+  /** Accepts .gitignore-style text (one rule per line, "#" comments), space/comma separated rules, or a pasted mutagen command's --ignore flags. */
+  function parseIgnoreRules(text) {
+    const s = String(text || '');
+    const flags = [...s.matchAll(/--ignore(?:=|\s+)("[^"]*"|'[^']*'|\S+)/g)].map((m) => m[1].replace(/^(["'])(.*)\1$/, '$2'));
+    if (flags.length) return flags;
+    return s.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).flatMap((l) => l.split(/[\s,]+/)).filter(Boolean);
+  }
+  const formatIgnoreRules = (rules) => rules.join('\n');
 
   const LOCAL_HOST = '__local';
   const hostLabel = (v) => (v === LOCAL_HOST ? '本机目录' : v);
@@ -1558,10 +1568,15 @@
           <label class="check" data-m="mirror" style="margin-top:12px"><input type="checkbox" data-f="spec.mirror">镜像模式：目标端多出来的文件也会被删除，保持与源端完全一致</label>
         </div>
         <div class="form-section">
-          <h4>${icon('filter', 'i-sm')}忽略规则 <span class="tag">匹配的文件或目录不参与同步，写法类似 .gitignore</span></h4>
+          <h4>${icon('filter', 'i-sm')}忽略规则 <span class="tag">匹配的文件或目录不参与同步，写法类似 .gitignore</span>
+            <span class="h4-actions">
+              <button type="button" class="btn btn-xs" data-m="ig-copy" title="每行一条复制到剪贴板，可粘贴到其他会话或 .gitignore">${icon('copy', 'i-sm')}复制</button>
+              <button type="button" class="btn btn-xs" data-m="ig-paste" title="从剪贴板追加规则：支持每行一条、空格或逗号分隔、# 注释，也可以直接粘贴等效命令">${icon('download', 'i-sm')}粘贴</button>
+              <button type="button" class="btn btn-xs" data-m="ig-clear" title="移除全部规则（可撤销）">${icon('x', 'i-sm')}清空</button>
+            </span></h4>
           <div class="presets tpls" data-m="templates"></div>
           <div class="presets" data-m="presets"></div>
-          <div class="tags-input" data-m="tags"><input data-m="tag-input" placeholder="输入后回车添加，例如 node_modules 或 *.log"></div>
+          <div class="tags-input" data-m="tags"><input data-m="tag-input" placeholder="输入后回车添加，例如 node_modules 或 *.log；也可直接粘贴多条"></div>
           <label class="check" style="margin-top:12px"><input type="checkbox" data-f="spec.ignoreVcs">忽略版本库目录（.git、.svn 等）。<span class="muted">想在本地 IDE 看 Git 变化就不要勾选</span></label>
         </div>
         <details class="adv form-section">
@@ -1644,6 +1659,8 @@
           const tagsBox = q('tags');
           $$('.tag-item', tagsBox).forEach((x) => x.remove());
           const input = q('tag-input');
+          q('ig-copy').disabled = !f.spec.ignores.length;
+          q('ig-clear').disabled = !f.spec.ignores.length;
           f.spec.ignores.forEach((ig, i) => {
             const t = document.createElement('span');
             t.className = 'tag-item';
@@ -1722,6 +1739,22 @@
           }
         });
         q('tag-input').addEventListener('blur', (e) => { if (e.target.value.trim()) { addTag(e.target.value); e.target.value = ''; } });
+        const pasteRules = (text) => {
+          const rules = [...new Set(parseIgnoreRules(text))];
+          const fresh = rules.filter((x) => !f.spec.ignores.includes(x));
+          if (!rules.length) { toast('剪贴板里没有可用的忽略规则', 'warn'); return; }
+          f.spec.ignores = [...f.spec.ignores, ...fresh];
+          refresh();
+          toast(fresh.length ? `已添加 ${fresh.length} 条规则${rules.length > fresh.length ? `，${rules.length - fresh.length} 条已存在` : ''}` : `${rules.length} 条规则都已存在`, 'ok', { duration: 2200 });
+        };
+        /** A single-line input drops newlines on paste, which would glue .gitignore lines together. */
+        q('tag-input').addEventListener('paste', (e) => {
+          const text = e.clipboardData && e.clipboardData.getData('text');
+          if (!text || !/[\s,]/.test(text.trim())) return;
+          e.preventDefault();
+          pasteRules(`${e.target.value}\n${text}`);
+          e.target.value = '';
+        });
 
         const setField = (key, val) => {
           setPath(f, key, val);
@@ -1786,6 +1819,21 @@
           if (!m) return;
           switch (m.dataset.m) {
             case 'tags': q('tag-input').focus(); break;
+            case 'ig-copy': copyText(formatIgnoreRules(f.spec.ignores), `已复制 ${f.spec.ignores.length} 条忽略规则`); break;
+            case 'ig-paste': {
+              let text = null;
+              try { text = await navigator.clipboard.readText(); } catch { /* blocked or insecure origin */ }
+              if (text == null) { q('tag-input').focus(); toast('无法读取剪贴板，请在输入框里按 Ctrl+V 粘贴', 'warn'); break; }
+              pasteRules(text);
+              break;
+            }
+            case 'ig-clear': {
+              const prev = f.spec.ignores;
+              f.spec.ignores = [];
+              refresh();
+              toast(`已清空 ${prev.length} 条规则`, 'ok', { action: { label: '撤销', run: () => { f.spec.ignores = prev; refresh(); } } });
+              break;
+            }
             case 'copy-preview': copyText(q('preview').textContent, '命令已复制'); break;
             case 'wizard': openSshWizard({ host: f.spec.remote.host, port: f.spec.remote.port }); break;
             case 'test': testConn(); break;
@@ -2839,7 +2887,7 @@
           <dt>同步方式</dt><dd>${esc(v.modeLabel)} <span class="muted mono">(${esc(s.mode || 'two-way-safe')})</span></dd>
           <dt>最近同步</dt><dd>${v.lastCycleAt ? esc(timeAgo(v.lastCycleAt)) : '<span class="muted">面板启动后尚未完成新的周期</span>'}</dd>
           <dt>已完成周期</dt><dd>${fmtNum(v.cycles)}</dd>
-          <dt>忽略规则</dt><dd>${v.ignores.length ? v.ignores.map((x) => `<code class="badge mono" style="margin:0 4px 4px 0">${esc(x)}</code>`).join('') : '<span class="muted">无</span>'}</dd>
+          <dt>忽略规则</dt><dd>${v.ignores.length ? v.ignores.map((x) => `<code class="badge mono" style="margin:0 4px 4px 0">${esc(x)}</code>`).join('') + `<button class="btn btn-xs" data-act="copy-ignores" style="margin-bottom:4px">${icon('copy', 'i-sm')}复制</button>` : '<span class="muted">无</span>'}</dd>
           <dt>版本库目录</dt><dd>${s.ignore && s.ignore.vcs ? '忽略（.git 等不同步）' : '同步'}</dd>
         </dl>
         <div class="section-title">两端</div>
